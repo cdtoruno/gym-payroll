@@ -46,9 +46,14 @@
 
       <!-- Page -->
       <main class="flex-1 px-8 py-6">
-        <RouterView />
+        <RouterView v-slot="{ Component }">
+          <KeepAlive :include="['PayrollView']">
+            <component :is="Component" />
+          </KeepAlive>
+        </RouterView>
       </main>
     </div>
+
   </div>
 </template>
 
@@ -67,8 +72,7 @@ const currentTitle = computed(() => ({
 }[route.path] || 'Gym Payroll'))
 
 const isActive = (path) =>
-  route.path === path ||
-  (path !== '/dashboard' && route.path.startsWith(path))
+  route.path === path
 
 const navItems = [
   {

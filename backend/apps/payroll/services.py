@@ -2,7 +2,7 @@ from decimal import Decimal
 from datetime import date
 
 from apps.employees.models import Employee
-from apps.vacations.models import Vacation
+from apps.vacations.models import Vacation, VacationAbsence
 from .models import PayrollRecord
 
 
@@ -13,16 +13,89 @@ class PayrollValidationError(Exception):
 def calculate_vacation_payment(salary_base: Decimal, dias_a_pagar: int) -> Decimal:
     """
     Calcula el pago de vacaciones según días a pagar.
-
-    Fórmula: dias_a_pagar × (salario ÷ 12)
-    - 2 días → salario ÷ 6  (normal)
-    - 1 día  → salario ÷ 12 (faltó 1 día en Q1 o Q2 anterior)
-    - 0 días → C$0           (faltó ambos días)
+    dias_a_pagar × (salario ÷ 12). Mínimo C$0.
     """
     if dias_a_pagar <= 0:
         return Decimal("0")
     pago_por_dia = Decimal(str(salary_base)) / Decimal("12")
     return (pago_por_dia * dias_a_pagar).quantize(Decimal("0.01"))
+
+
+def get_faltas_para_mes(employee, year: int, month: int) -> dict:
+    """
+    Calcula las faltas que afectan el Q1 de un mes específico
+    usando directamente el campo mes_afectado de VacationAbsence.
+
+    mes_afectado ya fue calculado correctamente al registrar la falta:
+    - Falta en Q1 de Marzo  → mes_afectado = 01/03
+    - Falta en Q2 de Marzo  → mes_afectado = 01/04
+
+    Por lo tanto filtrar por mes_afectado = date(year, month, 1)
+    devuelve exactamente las faltas que afectan ese Q1 y solo ese.
+    """
+    mes_afectado_date = date(year, month, 1)
+
+    total_faltas = VacationAbsence.objects.filter(
+        employee     = employee,
+        mes_afectado = mes_afectado_date,
+    ).count()
+
+    dias_a_pagar = max(0, 2 - total_faltas)
+
+    return {
+        "total_faltas": total_faltas,
+        "dias_a_pagar": dias_a_pagar,
+    }
+    
+    
+    """
+    Calcula las faltas reales para un mes específico
+    consultando directamente el historial de VacationAbsence.
+
+    Reglas:
+    - Faltas en Q1 del mes year/month → descuentan del Q1 de ese mes
+    - Faltas en Q2 del mes anterior  → también descuentan del Q1 de year/month
+
+    Retorna:
+        {
+          "faltas_q1": int,   faltas directas en Q1 de este mes
+          "faltas_q2_prev": int,  faltas en Q2 del mes anterior
+          "total_faltas": int,   suma de ambas
+          "dias_a_pagar": int,   max(0, 2 - total_faltas)
+        }
+    """
+    # Faltas en Q1 del mes actual (días 1-15)
+    faltas_q1 = VacationAbsence.objects.filter(
+        employee   = employee,
+        fecha__year  = year,
+        fecha__month = month,
+        es_q1        = True,
+    ).count()
+
+    # Faltas en Q2 del mes anterior (días 16-31 del mes previo)
+    if month == 1:
+        prev_year  = year - 1
+        prev_month = 12
+    else:
+        prev_year  = year
+        prev_month = month - 1
+
+    faltas_q2_prev = VacationAbsence.objects.filter(
+        employee     = employee,
+        fecha__year  = prev_year,
+        fecha__month = prev_month,
+        es_q1        = False,
+    ).count()
+
+    total_faltas = faltas_q1 + faltas_q2_prev
+    dias_a_pagar = max(0, 2 - total_faltas)
+
+    return {
+        "faltas_q1":      faltas_q1,
+        "faltas_q2_prev": faltas_q2_prev,
+        "total_faltas":   total_faltas,
+        "dias_a_pagar":   dias_a_pagar,
+    }
 
 
 def calculate_totals(
@@ -35,17 +108,14 @@ def calculate_totals(
 ) -> dict:
     """
     Cálculo puro sin acceso a BD.
-
-    Fórmula:
-        sub_total = salary_base + viatico [+ vacation_payment si Q1]
-        total     = sub_total - otras_deducciones - prestamo_adelanto
+    sub_total = salary_base + viatico [+ vacation_payment si Q1]
+    total     = sub_total - otras_deducciones - prestamo_adelanto
     """
     salary_base       = Decimal(str(salary_base))
     viatico           = Decimal(str(viatico))
     otras_deducciones = Decimal(str(otras_deducciones))
     prestamo_adelanto = Decimal(str(prestamo_adelanto))
-
-    vac = Decimal(str(vacation_payment)) if period == 1 else Decimal("0")
+    vac               = Decimal(str(vacation_payment)) if period == 1 else Decimal("0")
 
     sub_total = salary_base + vac + viatico
     total     = sub_total - otras_deducciones - prestamo_adelanto
@@ -55,6 +125,26 @@ def calculate_totals(
         "sub_total":        sub_total.quantize(Decimal("0.01")),
         "total":            total.quantize(Decimal("0.01")),
     }
+
+
+def get_vacation_payment_for_employee(
+    employee, period: int, year: int, month: int
+) -> Decimal:
+    """
+    Calcula el pago de vacaciones para un empleado en un período específico.
+    Consulta VacationAbsence para el mes exacto — no usa el estado persistido.
+    Solo aplica en Q1 (period == 1).
+    """
+    if period != 1:
+        return Decimal("0")
+
+    faltas = get_faltas_para_mes(employee, year, month)
+    vacation_payment = calculate_vacation_payment(
+        salary_base  = employee.salary_base,
+        dias_a_pagar = faltas["dias_a_pagar"],
+    )
+
+    return vacation_payment
 
 
 def generate_payroll(
@@ -68,25 +158,15 @@ def generate_payroll(
     notes: str = "",
 ) -> PayrollRecord:
     """
-    Valida, calcula y persiste el registro de nómina.
-
-    Lógica de vacaciones en Q1:
-    1. Se llama iniciar_nuevo_mes() → acredita 2 días frescos y
-       transfiere faltas de Q2 anterior a Q1 actual
-    2. Se calcula el pago según dias_a_pagar (ya con las faltas aplicadas)
-    3. Las faltas de Q1 que ocurran DESPUÉS de generar la nómina
-       aún afectan retroactivamente (se registran via /vacations/falta/)
-
-    Raises:
-        PayrollValidationError: si se violan reglas de negocio.
+    Genera o actualiza la nómina de un empleado.
+    Las vacaciones se calculan desde el historial real de faltas
+    del mes de la nómina — no desde el estado persistido del modelo.
     """
-    # ── Validar período ───────────────────────────────────────────────────────
     if period not in (1, 2):
         raise PayrollValidationError(
             "El período debe ser 1 (primera quincena) o 2 (segunda quincena)."
         )
 
-    # ── Convertir y validar montos ────────────────────────────────────────────
     viatico           = Decimal(str(viatico))
     otras_deducciones = Decimal(str(otras_deducciones))
     prestamo_adelanto = Decimal(str(prestamo_adelanto))
@@ -98,7 +178,6 @@ def generate_payroll(
     if viatico < 0:
         raise PayrollValidationError("El viático no puede ser negativo.")
 
-    # ── Buscar empleado activo ────────────────────────────────────────────────
     try:
         employee = Employee.objects.get(pk=employee_id, active=True)
     except Employee.DoesNotExist:
@@ -106,47 +185,14 @@ def generate_payroll(
             f"Empleado con ID {employee_id} no existe o está inactivo."
         )
 
-    # ── Verificar nómina duplicada ────────────────────────────────────────────
-    if PayrollRecord.objects.filter(
-        employee=employee, date=payroll_date, period=period
-    ).exists():
-        quincena = "primera" if period == 1 else "segunda"
-        raise PayrollValidationError(
-            f"Ya existe una nómina para '{employee.name}' "
-            f"en la {quincena} quincena de "
-            f"{payroll_date.strftime('%B %Y')}."
-        )
+    # ── Calcular vacaciones desde el historial real del mes ───────────────
+    vacation_payment = get_vacation_payment_for_employee(
+        employee = employee,
+        period   = period,
+        year     = payroll_date.year,
+        month    = payroll_date.month,
+    )
 
-    # ── Calcular vacaciones en Q1 ─────────────────────────────────────────────
-    vacation_payment = Decimal("0")
-    vacation_record  = None
-
-    if period == 1:
-        # Buscar o crear registro de vacaciones
-        vacation_record, _ = Vacation.objects.get_or_create(
-            employee=employee,
-            defaults={
-                "dias_disponibles":  2,
-                "dias_falta_q1":     0,
-                "dias_falta_q2":     0,
-            }
-        )
-
-        # Iniciar nuevo mes:
-        # - Acredita 2 días frescos
-        # - Transfiere faltas de Q2 anterior → Q1 actual
-        vacation_record.iniciar_nuevo_mes(
-            year=payroll_date.year,
-            month=payroll_date.month,
-        )
-
-        # Calcular pago con las faltas ya aplicadas
-        vacation_payment = calculate_vacation_payment(
-            salary_base  = employee.salary_base,
-            dias_a_pagar = vacation_record.dias_a_pagar,
-        )
-
-    # ── Calcular sub_total y total ────────────────────────────────────────────
     totals = calculate_totals(
         salary_base       = employee.salary_base,
         vacation_payment  = vacation_payment,
@@ -156,20 +202,95 @@ def generate_payroll(
         period            = period,
     )
 
-    # ── Persistir nómina ──────────────────────────────────────────────────────
-    record = PayrollRecord.objects.create(
-        employee          = employee,
-        date              = payroll_date,
-        period            = period,
-        dias_laborados    = dias_laborados,
-        salary_base       = employee.salary_base,
-        vacation_payment  = totals["vacation_payment"],
-        viatico           = viatico,
-        otras_deducciones = otras_deducciones,
-        prestamo_adelanto = prestamo_adelanto,
-        sub_total         = totals["sub_total"],
-        total             = totals["total"],
-        notes             = notes,
+    # Crear o actualizar
+    record, _ = PayrollRecord.objects.update_or_create(
+        employee = employee,
+        date     = payroll_date,
+        period   = period,
+        defaults = {
+            "dias_laborados":    dias_laborados,
+            "salary_base":       employee.salary_base,
+            "vacation_payment":  totals["vacation_payment"],
+            "viatico":           viatico,
+            "otras_deducciones": otras_deducciones,
+            "prestamo_adelanto": prestamo_adelanto,
+            "sub_total":         totals["sub_total"],
+            "total":             totals["total"],
+            "notes":             notes,
+        }
     )
 
     return record
+
+
+def generate_payroll_bulk(
+    payroll_date: date,
+    period: int,
+    items: list,
+) -> list:
+    """
+    Genera o actualiza la nómina de múltiples empleados.
+    """
+    if period not in (1, 2):
+        raise PayrollValidationError(
+            "El período debe ser 1 (primera quincena) o 2 (segunda quincena)."
+        )
+
+    if not items:
+        raise PayrollValidationError("Debes incluir al menos un empleado.")
+
+    records = []
+    errors  = []
+
+    for item in items:
+        employee_id       = item["employee_id"]
+        viatico           = Decimal(str(item.get("viatico",           0)))
+        otras_deducciones = Decimal(str(item.get("otras_deducciones", 0)))
+        prestamo_adelanto = Decimal(str(item.get("prestamo_adelanto", 0)))
+        notes             = item.get("notes", "")
+
+        try:
+            employee = Employee.objects.get(pk=employee_id, active=True)
+        except Employee.DoesNotExist:
+            errors.append(f"Empleado ID {employee_id} no existe o está inactivo.")
+            continue
+
+        # Calcular vacaciones desde historial real del mes
+        vacation_payment = get_vacation_payment_for_employee(
+            employee = employee,
+            period   = period,
+            year     = payroll_date.year,
+            month    = payroll_date.month,
+        )
+
+        totals = calculate_totals(
+            salary_base       = employee.salary_base,
+            vacation_payment  = vacation_payment,
+            viatico           = viatico,
+            otras_deducciones = otras_deducciones,
+            prestamo_adelanto = prestamo_adelanto,
+            period            = period,
+        )
+
+        record, _ = PayrollRecord.objects.update_or_create(
+            employee = employee,
+            date     = payroll_date,
+            period   = period,
+            defaults = {
+                "dias_laborados":    15,
+                "salary_base":       employee.salary_base,
+                "vacation_payment":  totals["vacation_payment"],
+                "viatico":           viatico,
+                "otras_deducciones": otras_deducciones,
+                "prestamo_adelanto": prestamo_adelanto,
+                "sub_total":         totals["sub_total"],
+                "total":             totals["total"],
+                "notes":             notes,
+            }
+        )
+        records.append(record)
+
+    if errors:
+        raise PayrollValidationError(" | ".join(errors))
+
+    return records

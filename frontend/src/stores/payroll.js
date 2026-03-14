@@ -1,12 +1,56 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { payrollService } from '@/services/payroll'
+
+const STORAGE_KEY = 'gym_payroll_session'
 
 export const usePayrollStore = defineStore('payroll', () => {
   const records  = ref([])
   const loading  = ref(false)
   const error    = ref(null)
 
+  // ── Estado persistente de la sesión de nómina ─────────────────────────────
+  const session = ref(cargarSesion())
+
+  function cargarSesion() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      return raw ? JSON.parse(raw) : sesionVacia()
+    } catch {
+      return sesionVacia()
+    }
+  }
+
+  function sesionVacia() {
+    return {
+      fecha:   '',
+      period:  '',
+      form: {
+        employee:          '',
+        viatico:           0,
+        otras_deducciones: 0,
+        prestamo_adelanto: 0,
+        notes:             ''
+      },
+      editando: null,
+    }
+  }
+
+  // Cada vez que cambia la sesión → guardar en localStorage
+  watch(session, (val) => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(val))
+  }, { deep: true })
+
+  function guardarSesion(datos) {
+    session.value = { ...session.value, ...datos }
+  }
+
+  function limpiarSesion() {
+    session.value = sesionVacia()
+    localStorage.removeItem(STORAGE_KEY)
+  }
+
+  // ── Records ───────────────────────────────────────────────────────────────
   const lastPayrollDate = computed(() => {
     if (!records.value.length) return null
     return records.value[0].date
@@ -52,6 +96,7 @@ export const usePayrollStore = defineStore('payroll', () => {
 
   return {
     records, loading, error, lastPayrollDate,
+    session, guardarSesion, limpiarSesion, sesionVacia,
     fetchAll, generate, exportCSV
   }
 })

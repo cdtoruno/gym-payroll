@@ -6,9 +6,15 @@ from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
+from apps.employees.models import Employee
+from apps.vacations.models import Vacation
 from .models import PayrollRecord
-from .serializers import PayrollRecordSerializer, GeneratePayrollSerializer
-from .services import generate_payroll, PayrollValidationError
+from .serializers import (
+    PayrollRecordSerializer,
+    GeneratePayrollSerializer,
+    BulkPayrollSerializer,
+)
+from .services import generate_payroll, generate_payroll_bulk, PayrollValidationError
 
 
 class PayrollListView(generics.ListAPIView):
@@ -27,12 +33,189 @@ class PayrollListView(generics.ListAPIView):
         if p.get("date_to"):   qs = qs.filter(date__lte=p["date_to"])
         if p.get("employee"):  qs = qs.filter(employee_id=p["employee"])
         return qs
+    
+class PayrollDetailView(generics.RetrieveDestroyAPIView):
+    """
+    GET    /api/payroll/{id}/  — detalle
+    DELETE /api/payroll/{id}/  — eliminar registro
+    """
+    queryset         = PayrollRecord.objects.select_related("employee").all()
+    serializer_class = PayrollRecordSerializer
+
+
+
+class PayrollPreviewView(APIView):
+    """
+    GET /api/payroll/preview/?date=YYYY-MM-DD&period=1
+    Usa el historial real de VacationAbsence para calcular
+    las vacaciones del mes exacto de la nómina.
+    """
+    def get(self, request):
+        payroll_date = request.query_params.get("date")
+        period       = request.query_params.get("period")
+
+        if not payroll_date or not period:
+            return Response(
+                {"error": "Se requieren los parámetros date y period."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            period       = int(period)
+            payroll_date = datetime.strptime(payroll_date, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "Formato de fecha inválido. Use YYYY-MM-DD."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        employees = Employee.objects.filter(active=True).order_by("name")
+        preview   = []
+
+        for emp in employees:
+            existing = PayrollRecord.objects.filter(
+                employee = emp,
+                date     = payroll_date,
+                period   = period
+            ).first()
+
+            # ── Calcular vacaciones desde historial real del mes ──────────
+            vacation_payment = 0
+            dias_a_pagar     = 0
+
+            if period == 1:
+                from apps.payroll.services import get_faltas_para_mes
+                faltas       = get_faltas_para_mes(
+                    employee = emp,
+                    year     = payroll_date.year,
+                    month    = payroll_date.month,
+                )
+                dias_a_pagar     = faltas["dias_a_pagar"]
+                pago_por_dia     = float(emp.salary_base) / 12
+                vacation_payment = round(dias_a_pagar * pago_por_dia, 2)
+
+            preview.append({
+                "employee_id":       emp.id,
+                "employee_name":     emp.name,
+                "employee_cedula":   emp.cedula,
+                "employee_position": emp.position,
+                "salary_base":       float(emp.salary_base),
+                "vacation_payment":  vacation_payment,
+                "dias_a_pagar":      dias_a_pagar,
+                "viatico":           float(existing.viatico)           if existing else 0,
+                "otras_deducciones": float(existing.otras_deducciones) if existing else 0,
+                "prestamo_adelanto": float(existing.prestamo_adelanto) if existing else 0,
+                "notes":             existing.notes                    if existing else "",
+                "already_generated": existing is not None,
+                "record_id":         existing.id                       if existing else None,
+            })
+
+        return Response(preview)
+
+    """
+    GET /api/payroll/preview/?date=YYYY-MM-DD&period=1
+    Retorna todos los empleados activos con sus vacaciones ya calculadas
+    para previsualizar la planilla antes de generarla.
+    """
+    def get(self, request):
+        payroll_date = request.query_params.get("date")
+        period       = request.query_params.get("period")
+
+        if not payroll_date or not period:
+            return Response(
+                {"error": "Se requieren los parámetros date y period."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            period       = int(period)
+            payroll_date = datetime.strptime(payroll_date, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "Formato de fecha inválido. Use YYYY-MM-DD."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        employees = Employee.objects.filter(active=True).order_by("name")
+        preview   = []
+
+        for emp in employees:
+            # Verificar si ya tiene nómina este período
+            existing = PayrollRecord.objects.filter(
+                employee=emp,
+                date=payroll_date,
+                period=period
+            ).first()
+
+            # Calcular vacaciones
+            vacation_payment = 0
+            dias_a_pagar     = 0
+
+            if period == 1:
+                try:
+                    vac          = Vacation.objects.get(employee=emp)
+                    dias_a_pagar = vac.dias_a_pagar
+                    pago_por_dia = float(emp.salary_base) / 12
+                    vacation_payment = round(dias_a_pagar * pago_por_dia, 2)
+                except Vacation.DoesNotExist:
+                    dias_a_pagar     = 2
+                    vacation_payment = round(float(emp.salary_base) / 6, 2)
+
+            preview.append({
+                "employee_id":        emp.id,
+                "employee_name":      emp.name,
+                "employee_cedula":    emp.cedula,
+                "employee_position":  emp.position,
+                "salary_base":        float(emp.salary_base),
+                "vacation_payment":   vacation_payment,
+                "dias_a_pagar":       dias_a_pagar,
+                "viatico":            float(existing.viatico)           if existing else 0,
+                "otras_deducciones":  float(existing.otras_deducciones) if existing else 0,
+                "prestamo_adelanto":  float(existing.prestamo_adelanto) if existing else 0,
+                "notes":              existing.notes                    if existing else "",
+                "already_generated":  existing is not None,
+                "record_id":          existing.id                       if existing else None,
+            })
+
+        return Response(preview)
+
+
+class GeneratePayrollBulkView(APIView):
+    """
+    POST /api/payroll/generate-bulk/
+    Genera o actualiza la nómina de todos los empleados en una operación.
+    """
+    def post(self, request):
+        serializer = BulkPayrollSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        data = serializer.validated_data
+        try:
+            records = generate_payroll_bulk(
+                payroll_date = data["date"],
+                period       = data["period"],
+                items        = data["items"],
+            )
+        except PayrollValidationError as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            PayrollRecordSerializer(records, many=True).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class GeneratePayrollView(APIView):
     """
     POST /api/payroll/generate/
-    Valida, calcula y guarda un nuevo registro de nómina.
+    Genera o actualiza nómina individual.
     """
     def post(self, request):
         serializer = GeneratePayrollSerializer(data=request.data)
@@ -63,7 +246,7 @@ class GeneratePayrollView(APIView):
 class ExportPayrollCSVView(APIView):
     """
     GET /api/payroll/export/
-    Descarga el historial como CSV — mismo formato que el Excel.
+    Descarga el historial como CSV.
     """
     def get(self, request):
         qs = PayrollRecord.objects.select_related("employee").all()
@@ -76,7 +259,7 @@ class ExportPayrollCSVView(APIView):
         filename = f"nomina_{datetime.now():%Y%m%d_%H%M%S}.csv"
         response = HttpResponse(content_type="text/csv; charset=utf-8")
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
-        response.write("\ufeff")  # BOM para Excel en Windows
+        response.write("\ufeff")
 
         writer = csv.writer(response)
         writer.writerow([
@@ -84,8 +267,7 @@ class ExportPayrollCSVView(APIView):
             "Salario Ordinario", "Vacaciones", "Viático",
             "Sub-Total Devengado",
             "Otras Deducciones", "Deduc. Préstamo/Adelanto",
-            "Total Devengado",
-            "Notas", "Generado",
+            "Total Devengado", "Notas", "Generado",
         ])
 
         for i, r in enumerate(qs, start=1):
