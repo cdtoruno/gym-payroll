@@ -1,0 +1,9 @@
+  --- POR HACER ---- 
+
+2 dias al mes
+que cuando se registra unas vacaciones, estas se deben linkear automatico a la nomina para hacer la deduccion de los dias faltantes
+Ahora si falta un dia de vacaciones pagadas, se resta la mitad de las vacaciones
+
+Si falta un día de la primera quincena, se le descuenta en la siguiente quincena del siguiente mes
+
+Ejemplo: Si falta el 11 de marzo, se le descuenta en Abril y ya solo tendría un día de vacaciones
