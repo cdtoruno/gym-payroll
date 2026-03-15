@@ -23,16 +23,21 @@ class PayrollRecord(models.Model):
     period          = models.IntegerField("Período", choices=PeriodChoices.choices)
     dias_laborados  = models.PositiveIntegerField("Días laborados", default=15)
 
-    # ── Ingresos ──────────────────────────────────────────────────────────────
+    # ── Ingresos ──────────────────────────────────────────────────────────
     salary_base      = models.DecimalField("Salario ordinario",  max_digits=10, decimal_places=2)
     vacation_payment = models.DecimalField("Vacaciones",         max_digits=10, decimal_places=2, default=0)
     viatico          = models.DecimalField("Viático",            max_digits=10, decimal_places=2, default=0)
 
-    # ── Deducciones ───────────────────────────────────────────────────────────
-    otras_deducciones  = models.DecimalField("Otras deducciones",       max_digits=10, decimal_places=2, default=0)
-    prestamo_adelanto  = models.DecimalField("Deduc. Préstamo/Adelanto", max_digits=10, decimal_places=2, default=0)
+    # ── Deducciones ───────────────────────────────────────────────────────
+    otras_deducciones  = models.DecimalField("Otras deducciones",        max_digits=10, decimal_places=2, default=0)
+    prestamo_adelanto  = models.DecimalField("Deduc. Préstamo/Adelanto",  max_digits=10, decimal_places=2, default=0)
+    descuento_faltas   = models.DecimalField(
+        "Descuento por faltas",
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Días extra faltados × (salario ÷ 15). Se aplica en Q2."
+    )
 
-    # ── Totales ───────────────────────────────────────────────────────────────
+    # ── Totales ───────────────────────────────────────────────────────────
     sub_total = models.DecimalField("Sub-total devengado", max_digits=10, decimal_places=2, default=0)
     total     = models.DecimalField("Total devengado",     max_digits=10, decimal_places=2)
 

@@ -1,16 +1,26 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+import dj_database_url
 
-# ── Base ──────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-key-cambiar-en-produccion")
 DEBUG       = os.environ.get("DJANGO_DEBUG", "True") == "True"
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0"]
 
-# ── Apps instaladas ───────────────────────────────────────────────────────────
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    ".onrender.com",   # Render
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://*.onrender.com",
+    "https://*.vercel.app",
+]
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -25,9 +35,9 @@ INSTALLED_APPS = [
     "apps.payroll",
 ]
 
-# ── Middleware ────────────────────────────────────────────────────────────────
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",   # ← para archivos estáticos
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -54,30 +64,50 @@ TEMPLATES = [{
     },
 }]
 
-# ── Base de datos — PostgreSQL ────────────────────────────────────────────────
-DATABASES = {
-    "default": {
-        "ENGINE":   "django.db.backends.postgresql",
-        "NAME":     os.environ.get("DB_NAME",     "gym_payroll_db"),
-        "USER":     os.environ.get("DB_USER",     "gym_user"),
-        "PASSWORD": os.environ.get("DB_PASSWORD", "gym_password"),
-        "HOST":     os.environ.get("DB_HOST",     "127.0.0.1"),
-        "PORT":     os.environ.get("DB_PORT",     "5432"),
-    }
-}
+# ── Base de datos ─────────────────────────────────────────────────────────────
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# ── Internacionalización ──────────────────────────────────────────────────────
+if DATABASE_URL:
+    # Producción (Supabase/Render)
+    DATABASES = {
+        "default": dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=600,
+            ssl_require=True,
+        )
+    }
+else:
+    # Local
+    DATABASES = {
+        "default": {
+            "ENGINE":   "django.db.backends.postgresql",
+            "NAME":     os.environ.get("DB_NAME",     "gym_payroll_db"),
+            "USER":     os.environ.get("DB_USER",     "gym_user"),
+            "PASSWORD": os.environ.get("DB_PASSWORD", "gym_password"),
+            "HOST":     os.environ.get("DB_HOST",     "127.0.0.1"),
+            "PORT":     os.environ.get("DB_PORT",     "5432"),
+        }
+    }
+
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
 LANGUAGE_CODE = "es-mx"
 TIME_ZONE     = "America/Mexico_City"
 USE_I18N      = True
 USE_TZ        = True
 
+# ── Archivos estáticos ────────────────────────────────────────────────────────
 STATIC_URL  = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# ── Django REST Framework ─────────────────────────────────────────────────────
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES":   ["rest_framework.renderers.JSONRenderer"],
     "DEFAULT_PARSER_CLASSES":     ["rest_framework.parsers.JSONParser"],
@@ -92,4 +122,16 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:3000",
 ]
+
+# En producción se agrega el dominio de Vercel
+VERCEL_URL = os.environ.get("VERCEL_URL")
+if VERCEL_URL:
+    CORS_ALLOWED_ORIGINS.append(f"https://{VERCEL_URL}")
+
+# Permite todos los orígenes de Vercel y Render
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+    r"^https://.*\.onrender\.com$",
+]
+
 CORS_ALLOW_ALL_ORIGINS = DEBUG

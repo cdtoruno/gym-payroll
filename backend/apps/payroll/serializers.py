@@ -13,13 +13,16 @@ class PayrollRecordSerializer(serializers.ModelSerializer):
         fields = [
             "id", "employee", "employee_name", "employee_cedula",
             "date", "period", "period_label", "dias_laborados",
+            # Ingresos
             "salary_base", "vacation_payment", "viatico",
-            "otras_deducciones", "prestamo_adelanto",
+            # Deducciones
+            "otras_deducciones", "prestamo_adelanto", "descuento_faltas",
+            # Totales
             "sub_total", "total",
             "notes", "created_at", "updated_at",
         ]
         read_only_fields = [
-            "id", "salary_base", "vacation_payment",
+            "id", "salary_base", "vacation_payment", "descuento_faltas",
             "sub_total", "total", "created_at", "updated_at",
         ]
 
@@ -47,7 +50,7 @@ class BulkPayrollSerializer(serializers.Serializer):
 
 
 class GeneratePayrollSerializer(serializers.Serializer):
-    """Serializer individual — se mantiene por compatibilidad."""
+    """Serializer individual."""
     employee          = serializers.IntegerField()
     date              = serializers.DateField()
     period            = serializers.ChoiceField(choices=[1, 2])

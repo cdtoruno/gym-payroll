@@ -7,14 +7,20 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from apps.employees.models import Employee
-from apps.vacations.models import Vacation
+from apps.vacations.models import VacationAbsence
 from .models import PayrollRecord
 from .serializers import (
     PayrollRecordSerializer,
     GeneratePayrollSerializer,
     BulkPayrollSerializer,
 )
-from .services import generate_payroll, generate_payroll_bulk, PayrollValidationError
+from .services import (
+    generate_payroll,
+    generate_payroll_bulk,
+    get_faltas_para_mes,
+    get_descuento_faltas_q2,
+    PayrollValidationError,
+)
 
 
 class PayrollListView(generics.ListAPIView):
@@ -33,22 +39,22 @@ class PayrollListView(generics.ListAPIView):
         if p.get("date_to"):   qs = qs.filter(date__lte=p["date_to"])
         if p.get("employee"):  qs = qs.filter(employee_id=p["employee"])
         return qs
-    
+
+
 class PayrollDetailView(generics.RetrieveDestroyAPIView):
     """
-    GET    /api/payroll/{id}/  — detalle
-    DELETE /api/payroll/{id}/  — eliminar registro
+    GET    /api/payroll/{id}/
+    DELETE /api/payroll/{id}/
     """
     queryset         = PayrollRecord.objects.select_related("employee").all()
     serializer_class = PayrollRecordSerializer
 
 
-
 class PayrollPreviewView(APIView):
     """
     GET /api/payroll/preview/?date=YYYY-MM-DD&period=1
-    Usa el historial real de VacationAbsence para calcular
-    las vacaciones del mes exacto de la nómina.
+    Muestra todos los empleados con vacaciones y descuentos
+    calculados desde el historial real de faltas.
     """
     def get(self, request):
         payroll_date = request.query_params.get("date")
@@ -79,12 +85,11 @@ class PayrollPreviewView(APIView):
                 period   = period
             ).first()
 
-            # ── Calcular vacaciones desde historial real del mes ──────────
+            # ── Vacaciones desde historial real (solo Q1) ─────────────────
             vacation_payment = 0
             dias_a_pagar     = 0
 
             if period == 1:
-                from apps.payroll.services import get_faltas_para_mes
                 faltas       = get_faltas_para_mes(
                     employee = emp,
                     year     = payroll_date.year,
@@ -94,14 +99,44 @@ class PayrollPreviewView(APIView):
                 pago_por_dia     = float(emp.salary_base) / 12
                 vacation_payment = round(dias_a_pagar * pago_por_dia, 2)
 
+            # ── Descuento por faltas (solo Q2) ────────────────────────────
+            descuento_faltas = 0
+            dias_descuento   = 0
+
+            if period == 2:
+                # Faltas Q1 que exceden 2 días
+                faltas_q1 = VacationAbsence.objects.filter(
+                    employee     = emp,
+                    fecha__year  = payroll_date.year,
+                    fecha__month = payroll_date.month,
+                    es_q1        = True,
+                ).count()
+
+                # Faltas Q2 del mes
+                faltas_q2 = VacationAbsence.objects.filter(
+                    employee     = emp,
+                    fecha__year  = payroll_date.year,
+                    fecha__month = payroll_date.month,
+                    es_q1        = False,
+                ).count()
+
+                dias_descuento   = max(0, faltas_q1 - 2) + faltas_q2
+                pago_por_dia_q2  = float(emp.salary_base) / 15
+                descuento_faltas = round(dias_descuento * pago_por_dia_q2, 2)
+
             preview.append({
                 "employee_id":       emp.id,
                 "employee_name":     emp.name,
                 "employee_cedula":   emp.cedula,
                 "employee_position": emp.position,
                 "salary_base":       float(emp.salary_base),
+                # Q1
                 "vacation_payment":  vacation_payment,
                 "dias_a_pagar":      dias_a_pagar,
+                # Q2
+                "descuento_faltas":  descuento_faltas,
+                "dias_descuento":    dias_descuento,
+                # Editables existentes
                 "viatico":           float(existing.viatico)           if existing else 0,
                 "otras_deducciones": float(existing.otras_deducciones) if existing else 0,
                 "prestamo_adelanto": float(existing.prestamo_adelanto) if existing else 0,
@@ -112,78 +147,10 @@ class PayrollPreviewView(APIView):
 
         return Response(preview)
 
-    """
-    GET /api/payroll/preview/?date=YYYY-MM-DD&period=1
-    Retorna todos los empleados activos con sus vacaciones ya calculadas
-    para previsualizar la planilla antes de generarla.
-    """
-    def get(self, request):
-        payroll_date = request.query_params.get("date")
-        period       = request.query_params.get("period")
-
-        if not payroll_date or not period:
-            return Response(
-                {"error": "Se requieren los parámetros date y period."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            period       = int(period)
-            payroll_date = datetime.strptime(payroll_date, "%Y-%m-%d").date()
-        except (ValueError, TypeError):
-            return Response(
-                {"error": "Formato de fecha inválido. Use YYYY-MM-DD."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        employees = Employee.objects.filter(active=True).order_by("name")
-        preview   = []
-
-        for emp in employees:
-            # Verificar si ya tiene nómina este período
-            existing = PayrollRecord.objects.filter(
-                employee=emp,
-                date=payroll_date,
-                period=period
-            ).first()
-
-            # Calcular vacaciones
-            vacation_payment = 0
-            dias_a_pagar     = 0
-
-            if period == 1:
-                try:
-                    vac          = Vacation.objects.get(employee=emp)
-                    dias_a_pagar = vac.dias_a_pagar
-                    pago_por_dia = float(emp.salary_base) / 12
-                    vacation_payment = round(dias_a_pagar * pago_por_dia, 2)
-                except Vacation.DoesNotExist:
-                    dias_a_pagar     = 2
-                    vacation_payment = round(float(emp.salary_base) / 6, 2)
-
-            preview.append({
-                "employee_id":        emp.id,
-                "employee_name":      emp.name,
-                "employee_cedula":    emp.cedula,
-                "employee_position":  emp.position,
-                "salary_base":        float(emp.salary_base),
-                "vacation_payment":   vacation_payment,
-                "dias_a_pagar":       dias_a_pagar,
-                "viatico":            float(existing.viatico)           if existing else 0,
-                "otras_deducciones":  float(existing.otras_deducciones) if existing else 0,
-                "prestamo_adelanto":  float(existing.prestamo_adelanto) if existing else 0,
-                "notes":              existing.notes                    if existing else "",
-                "already_generated":  existing is not None,
-                "record_id":          existing.id                       if existing else None,
-            })
-
-        return Response(preview)
-
 
 class GeneratePayrollBulkView(APIView):
     """
     POST /api/payroll/generate-bulk/
-    Genera o actualiza la nómina de todos los empleados en una operación.
     """
     def post(self, request):
         serializer = BulkPayrollSerializer(data=request.data)
@@ -215,7 +182,6 @@ class GeneratePayrollBulkView(APIView):
 class GeneratePayrollView(APIView):
     """
     POST /api/payroll/generate/
-    Genera o actualiza nómina individual.
     """
     def post(self, request):
         serializer = GeneratePayrollSerializer(data=request.data)
@@ -246,7 +212,6 @@ class GeneratePayrollView(APIView):
 class ExportPayrollCSVView(APIView):
     """
     GET /api/payroll/export/
-    Descarga el historial como CSV.
     """
     def get(self, request):
         qs = PayrollRecord.objects.select_related("employee").all()
@@ -267,6 +232,7 @@ class ExportPayrollCSVView(APIView):
             "Salario Ordinario", "Vacaciones", "Viático",
             "Sub-Total Devengado",
             "Otras Deducciones", "Deduc. Préstamo/Adelanto",
+            "Descuento Faltas",
             "Total Devengado", "Notas", "Generado",
         ])
 
@@ -283,6 +249,7 @@ class ExportPayrollCSVView(APIView):
                 r.sub_total,
                 r.otras_deducciones,
                 r.prestamo_adelanto,
+                r.descuento_faltas,
                 r.total,
                 r.notes,
                 r.created_at.strftime("%Y-%m-%d %H:%M"),

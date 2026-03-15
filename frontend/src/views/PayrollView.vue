@@ -39,7 +39,7 @@
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-      <!-- ── Columna izquierda: formulario ─────────────────────────────────── -->
+      <!-- ── Columna izquierda: formulario ─────────────────────────────── -->
       <div class="card space-y-5">
         <h2 class="text-lg font-semibold text-gray-900">
           {{ editando ? 'Editar nómina' : 'Agregar empleado' }}
@@ -117,12 +117,15 @@
             <span class="text-gray-600">Salario ordinario</span>
             <span class="text-right font-medium">{{ fmt(preview.salary_base) }}</span>
 
+            <!-- Vacaciones solo en Q1 -->
             <template v-if="period == 1">
-              <span class="text-gray-600">Vacaciones</span>
+              <span class="text-gray-600">
+                Vacaciones
+                <span class="text-xs opacity-70">({{ preview.dias_a_pagar }} día(s))</span>
+              </span>
               <span class="text-right font-medium"
                     :class="vacClass(preview.dias_a_pagar)">
                 + {{ fmt(preview.vacation_payment) }}
-                <span class="text-xs opacity-70">({{ preview.dias_a_pagar }} día(s))</span>
               </span>
             </template>
 
@@ -144,9 +147,25 @@
               − {{ fmt(form.prestamo_adelanto || 0) }}
             </span>
 
-            <div class="col-span-2 border-t border-blue-200 pt-2 mt-1 flex justify-between">
+            <!-- Descuento por faltas solo en Q2 -->
+            <template v-if="period == 2 && preview.descuento_faltas > 0">
+              <span class="text-gray-600">
+                Desc. por faltas
+                <span class="text-xs opacity-70">
+                  ({{ preview.dias_descuento }} día(s) × salario÷15)
+                </span>
+              </span>
+              <span class="text-right font-medium text-red-500">
+                − {{ fmt(preview.descuento_faltas) }}
+              </span>
+            </template>
+
+            <div class="col-span-2 border-t border-blue-200 pt-2 mt-1
+                        flex justify-between">
               <span class="font-bold text-gray-900">Total devengado</span>
-              <span class="font-bold text-xl text-blue-700">{{ fmt(preview.total) }}</span>
+              <span class="font-bold text-xl text-blue-700">
+                {{ fmt(preview.total) }}
+              </span>
             </div>
           </div>
         </div>
@@ -172,7 +191,7 @@
         </div>
       </div>
 
-      <!-- ── Columna derecha: registros ────────────────────────────────────── -->
+      <!-- ── Columna derecha: registros ────────────────────────────────── -->
       <div class="card p-0 overflow-hidden">
         <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <h2 class="text-base font-semibold text-gray-900">Planilla actual</h2>
@@ -196,29 +215,37 @@
         <div v-else class="divide-y divide-gray-50">
           <div v-for="r in registros" :key="r.id"
                class="px-6 py-4 hover:bg-gray-50 transition-colors"
-               :class="editando?.id === r.id ? 'bg-blue-50 border-l-4 border-blue-500' : ''">
+               :class="editando?.id === r.id
+                 ? 'bg-blue-50 border-l-4 border-blue-500' : ''">
             <div class="flex items-start justify-between gap-4">
               <div class="flex-1 min-w-0">
-                <p class="font-semibold text-gray-900 truncate">{{ r.employee_name }}</p>
+                <p class="font-semibold text-gray-900 truncate">
+                  {{ r.employee_name }}
+                </p>
                 <p class="text-xs text-gray-400">{{ r.employee_cedula }}</p>
 
-                <!-- Alerta de vacaciones desactualizadas -->
+                <!-- Alerta vacaciones desactualizadas -->
                 <div v-if="tieneVacacionesDesactualizadas(r)"
                      class="mt-1 flex items-center gap-1 text-xs text-amber-600">
-                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24"
+                       stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                          stroke-width="2"
                           d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                   </svg>
                   Vacaciones cambiaron — editar para actualizar
                 </div>
 
-                <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-500">
+                <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1
+                            text-xs text-gray-500">
                   <span>Salario:
                     <strong>{{ fmt(r.salary_base) }}</strong>
                   </span>
                   <span v-if="r.vacation_payment > 0">
                     Vacaciones:
-                    <strong class="text-purple-600">{{ fmt(r.vacation_payment) }}</strong>
+                    <strong class="text-purple-600">
+                      {{ fmt(r.vacation_payment) }}
+                    </strong>
                   </span>
                   <span v-if="r.viatico > 0">
                     Viático:
@@ -226,11 +253,21 @@
                   </span>
                   <span v-if="r.otras_deducciones > 0">
                     Dedu.:
-                    <strong class="text-red-500">{{ fmt(r.otras_deducciones) }}</strong>
+                    <strong class="text-red-500">
+                      {{ fmt(r.otras_deducciones) }}
+                    </strong>
                   </span>
                   <span v-if="r.prestamo_adelanto > 0">
                     Préstamo:
-                    <strong class="text-red-500">{{ fmt(r.prestamo_adelanto) }}</strong>
+                    <strong class="text-red-500">
+                      {{ fmt(r.prestamo_adelanto) }}
+                    </strong>
+                  </span>
+                  <span v-if="r.descuento_faltas > 0">
+                    Desc. faltas:
+                    <strong class="text-red-600">
+                      {{ fmt(r.descuento_faltas) }}
+                    </strong>
                   </span>
                 </div>
               </div>
@@ -240,12 +277,14 @@
                   {{ fmt(r.total) }}
                 </span>
                 <div class="flex gap-2">
-                  <button class="text-blue-600 hover:text-blue-800 text-xs font-medium"
-                          @click="iniciarEdicion(r)">
+                  <button
+                    class="text-blue-600 hover:text-blue-800 text-xs font-medium"
+                    @click="iniciarEdicion(r)">
                     Editar
                   </button>
-                  <button class="text-red-500 hover:text-red-700 text-xs font-medium"
-                          @click="confirmarEliminar(r)">
+                  <button
+                    class="text-red-500 hover:text-red-700 text-xs font-medium"
+                    @click="confirmarEliminar(r)">
                     Borrar
                   </button>
                 </div>
@@ -258,7 +297,9 @@
             <span class="text-sm font-semibold text-gray-700">
               {{ registros.length }} empleados
             </span>
-            <span class="font-bold text-blue-700 text-lg">{{ fmt(totalGeneral) }}</span>
+            <span class="font-bold text-blue-700 text-lg">
+              {{ fmt(totalGeneral) }}
+            </span>
           </div>
         </div>
       </div>
@@ -295,10 +336,10 @@ const empStore = useEmployeesStore()
 const vacStore = useVacationsStore()
 const store    = usePayrollStore()
 
-// ── Estado — restaurado desde la sesión persistida ────────────────────────────
-const fecha   = ref(store.session.fecha)
-const period  = ref(store.session.period)
-const form    = ref({ ...store.session.form })
+// ── Estado restaurado desde sesión persistida ─────────────────────────────────
+const fecha    = ref(store.session.fecha)
+const period   = ref(store.session.period)
+const form     = ref({ ...store.session.form })
 const editando = ref(store.session.editando)
 
 const registros        = ref([])
@@ -343,7 +384,7 @@ function tieneVacacionesDesactualizadas(registro) {
   return Math.abs(montoEsperado - montoActual) > 0.01
 }
 
-// ── Persistir estado en el store ──────────────────────────────────────────────
+// ── Persistir estado ──────────────────────────────────────────────────────────
 function persistirForm() {
   store.guardarSesion({
     fecha:    fecha.value,
@@ -379,6 +420,15 @@ async function onFechaPeriodoChange() {
   if (form.value.employee) await actualizarPreview()
 }
 
+// ── Auto-seleccionar período según fecha ──────────────────────────────────────
+watch(() => fecha.value, (nuevaFecha) => {
+  if (!nuevaFecha) return
+  const dia    = new Date(nuevaFecha + 'T00:00:00').getDate()
+  period.value = dia <= 15 ? 1 : 2
+  persistirForm()
+  if (form.value.employee) actualizarPreview()
+})
+
 // ── Preview en tiempo real ────────────────────────────────────────────────────
 async function actualizarPreview() {
   if (!form.value.employee || !fecha.value || !period.value) return
@@ -389,31 +439,35 @@ async function actualizarPreview() {
     const emp = res.data.find(e => e.employee_id === form.value.employee)
     if (!emp) return
 
-    const vac       = period.value == 1 ? parseFloat(emp.vacation_payment || 0) : 0
+    const vac      = period.value == 1 ? parseFloat(emp.vacation_payment || 0) : 0
+    const desc     = period.value == 2 ? parseFloat(emp.descuento_faltas  || 0) : 0
     const sub_total = parseFloat(emp.salary_base)
       + vac
       + parseFloat(form.value.viatico || 0)
     const total = sub_total
       - parseFloat(form.value.otras_deducciones || 0)
       - parseFloat(form.value.prestamo_adelanto  || 0)
+      - desc
 
     preview.value = {
       salary_base:      emp.salary_base,
       vacation_payment: emp.vacation_payment,
       dias_a_pagar:     emp.dias_a_pagar,
+      descuento_faltas: emp.descuento_faltas,
+      dias_descuento:   emp.dias_descuento,
       sub_total,
       total,
     }
   } catch {}
 }
 
-// Watch empleado → actualizar preview y persistir
+// Watch empleado
 watch(() => form.value.employee, () => {
   persistirForm()
   actualizarPreview()
 })
 
-// Watch montos → persistir
+// Watch montos
 watch([
   () => form.value.viatico,
   () => form.value.otras_deducciones,
@@ -445,7 +499,6 @@ async function guardar() {
       .find(e => e.id === form.value.employee)?.name
     formSuccess.value = `✅ Nómina de ${empName} guardada correctamente.`
 
-    // Limpiar form pero mantener fecha y período
     form.value    = store.sesionVacia().form
     preview.value = {}
     editando.value = null
@@ -514,23 +567,22 @@ async function eliminar() {
   }
 }
 
-// ── Limpiar sesión completa ───────────────────────────────────────────────────
+// ── Limpiar sesión ────────────────────────────────────────────────────────────
 function limpiarTodo() {
   store.limpiarSesion()
-  fecha.value    = ''
-  period.value   = ''
-  form.value     = store.sesionVacia().form
-  editando.value = null
-  preview.value  = {}
+  fecha.value     = ''
+  period.value    = ''
+  form.value      = store.sesionVacia().form
+  editando.value  = null
+  preview.value   = {}
   registros.value = []
 }
 
-// ── Al montar y al volver a la vista ─────────────────────────────────────────
+// ── Inicializar ───────────────────────────────────────────────────────────────
 async function inicializar() {
   if (!empStore.employees.length) await empStore.fetchAll()
   if (!vacStore.vacations.length) await vacStore.fetchAll()
 
-  // Restaurar registros si ya había fecha/período guardados
   if (fecha.value && period.value) {
     await cargarRegistros()
     if (form.value.employee) await actualizarPreview()
@@ -539,8 +591,6 @@ async function inicializar() {
 
 onMounted(inicializar)
 
-// onActivated se ejecuta cada vez que se vuelve a esta vista
-// → recarga registros y vacaciones para reflejar cambios en tiempo real
 onActivated(async () => {
   await vacStore.fetchAll()
   if (fecha.value && period.value) {
