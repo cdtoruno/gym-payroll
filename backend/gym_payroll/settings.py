@@ -1,7 +1,7 @@
 import os
+import urllib.parse
 from pathlib import Path
 from dotenv import load_dotenv
-import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -13,7 +13,7 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "0.0.0.0",
-    ".onrender.com",   # Render
+    ".onrender.com",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -37,7 +37,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",   # ← para archivos estáticos
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -68,16 +68,20 @@ TEMPLATES = [{
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if DATABASE_URL:
-    # Producción (Supabase/Render)
+    # Parseo manual — compatible con Python 3.14
+    r = urllib.parse.urlparse(DATABASE_URL)
     DATABASES = {
-        "default": dj_database_url.parse(
-            DATABASE_URL,
-            conn_max_age=600,
-            ssl_require=True,
-        )
+        "default": {
+            "ENGINE":   "django.db.backends.postgresql",
+            "NAME":     r.path[1:],
+            "USER":     r.username,
+            "PASSWORD": r.password,
+            "HOST":     r.hostname,
+            "PORT":     r.port or 5432,
+            "OPTIONS":  {"sslmode": "require"},
+        }
     }
 else:
-    # Local
     DATABASES = {
         "default": {
             "ENGINE":   "django.db.backends.postgresql",
@@ -123,15 +127,14 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
 ]
 
-# En producción se agrega el dominio de Vercel
 VERCEL_URL = os.environ.get("VERCEL_URL")
 if VERCEL_URL:
     CORS_ALLOWED_ORIGINS.append(f"https://{VERCEL_URL}")
 
-# Permite todos los orígenes de Vercel y Render
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://.*\.vercel\.app$",
     r"^https://.*\.onrender\.com$",
 ]
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG
+
