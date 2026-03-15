@@ -1,5 +1,5 @@
 import os
-import urllib.parse
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -68,19 +68,25 @@ TEMPLATES = [{
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if DATABASE_URL:
-    # Parseo manual — compatible con Python 3.14
-    r = urllib.parse.urlparse(DATABASE_URL)
-    DATABASES = {
-        "default": {
-            "ENGINE":   "django.db.backends.postgresql",
-            "NAME":     r.path[1:],
-            "USER":     r.username,
-            "PASSWORD": r.password,
-            "HOST":     r.hostname,
-            "PORT":     r.port or 5432,
-            "OPTIONS":  {"sslmode": "require"},
+    # Parseo con regex — evita el bug de Python 3.14 con corchetes en contraseñas
+    m = re.match(
+        r'postgresql://(?P<user>[^:]+):(?P<password>.+)@(?P<host>[^:]+):(?P<port>\d+)/(?P<name>.+)',
+        DATABASE_URL
+    )
+    if m:
+        DATABASES = {
+            "default": {
+                "ENGINE":   "django.db.backends.postgresql",
+                "NAME":     m.group("name"),
+                "USER":     m.group("user"),
+                "PASSWORD": m.group("password"),
+                "HOST":     m.group("host"),
+                "PORT":     m.group("port"),
+                "OPTIONS":  {"sslmode": "require"},
+            }
         }
-    }
+    else:
+        raise Exception(f"No se pudo parsear DATABASE_URL")
 else:
     DATABASES = {
         "default": {
@@ -137,4 +143,3 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 ]
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG
-
