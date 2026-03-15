@@ -25,6 +25,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://*.onrender.com",
     "https://*.vercel.app",
     "https://*.up.railway.app",
+    "https://gym-payroll-production.up.railway.app",
 ]
 
 INSTALLED_APPS = [
