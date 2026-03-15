@@ -14,7 +14,13 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
     "0.0.0.0",
     ".onrender.com",
+    ".up.railway.app",
 ]
+
+# Agrega el host dinámico si está definido
+RAILWAY_HOST = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+if RAILWAY_HOST:
+    ALLOWED_HOSTS.append(RAILWAY_HOST)
 
 CSRF_TRUSTED_ORIGINS = [
     "https://*.onrender.com",
