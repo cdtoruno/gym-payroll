@@ -7,9 +7,6 @@ pip install -r requirements.txt
 echo "📁 Creando carpeta staticfiles..."
 mkdir -p staticfiles
 
-echo "🔄 Generando migraciones pendientes..."
-python manage.py makemigrations --no-input
-
 echo "🔄 Aplicando migraciones..."
 python manage.py migrate --no-input
 
