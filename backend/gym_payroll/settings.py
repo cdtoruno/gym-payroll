@@ -17,7 +17,6 @@ ALLOWED_HOSTS = [
     ".up.railway.app",
 ]
 
-# Agrega el host dinámico si está definido
 RAILWAY_HOST = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
 if RAILWAY_HOST:
     ALLOWED_HOSTS.append(RAILWAY_HOST)
@@ -25,6 +24,7 @@ if RAILWAY_HOST:
 CSRF_TRUSTED_ORIGINS = [
     "https://*.onrender.com",
     "https://*.vercel.app",
+    "https://*.up.railway.app",
 ]
 
 INSTALLED_APPS = [
@@ -43,7 +43,6 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -74,7 +73,6 @@ TEMPLATES = [{
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if DATABASE_URL:
-    # Parseo con regex — evita el bug de Python 3.14 con corchetes en contraseñas
     m = re.match(
         r'postgresql://(?P<user>[^:]+):(?P<password>.+)@(?P<host>[^:]+):(?P<port>\d+)/(?P<name>.+)',
         DATABASE_URL
@@ -92,7 +90,7 @@ if DATABASE_URL:
             }
         }
     else:
-        raise Exception(f"No se pudo parsear DATABASE_URL")
+        raise Exception("No se pudo parsear DATABASE_URL")
 else:
     DATABASES = {
         "default": {
@@ -117,10 +115,8 @@ TIME_ZONE     = "America/Mexico_City"
 USE_I18N      = True
 USE_TZ        = True
 
-# ── Archivos estáticos ────────────────────────────────────────────────────────
 STATIC_URL  = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-STATICFILES_STORAGE = "whitenoise.storage.StaticFilesStorage"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -145,7 +141,7 @@ if VERCEL_URL:
 
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://.*\.vercel\.app$",
-    r"^https://.*\.onrender\.com$",
+    r"^https://.*\.up\.railway\.app$",
 ]
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG
