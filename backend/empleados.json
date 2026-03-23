@@ -1,0 +1,56 @@
+[
+  {
+    "name": "Aaron Haniel Duarte Lindo",
+    "cedula": "001-090880-0081S",
+    "phone": "",
+    "position": "Entrenador",
+    "salary_base": "6500.00",
+    "hire_date": "2020-01-01",
+    "active": true
+  },
+  {
+    "name": "Estefany Andrea Navarro Lopez",
+    "cedula": "001-041296-0004M",
+    "phone": "",
+    "position": "Recepción",
+    "salary_base": "3000.00",
+    "hire_date": "2020-01-01",
+    "active": true
+  },
+  {
+    "name": "Giovany Jafet Martinez Montoya",
+    "cedula": "001-020803-1058H",
+    "phone": "",
+    "position": "Entrenador",
+    "salary_base": "5000.00",
+    "hire_date": "2020-01-01",
+    "active": true
+  },
+  {
+    "name": "Julio Cesar Castillo Jarquin",
+    "cedula": "001-240493-0017J",
+    "phone": "",
+    "position": "Entrenador",
+    "salary_base": "4500.00",
+    "hire_date": "2020-01-01",
+    "active": true
+  },
+  {
+    "name": "Pedro José Guevara García",
+    "cedula": "001-030561-0050E",
+    "phone": "",
+    "position": "Conserje",
+    "salary_base": "3500.00",
+    "hire_date": "2020-01-01",
+    "active": true
+  },
+  {
+    "name": "Sitri Zambrana Quiroz",
+    "cedula": "001-110964-0020Y",
+    "phone": "",
+    "position": "Mantenimiento",
+    "salary_base": "5000.00",
+    "hire_date": "2020-01-01",
+    "active": true
+  }
+]

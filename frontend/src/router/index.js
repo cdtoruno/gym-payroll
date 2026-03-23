@@ -24,6 +24,12 @@ const routes = [
     meta: { title: 'Vacaciones' }
   },
   {
+    path: '/attendance',
+    name: 'Attendance',
+    component: () => import('@/views/AttendanceView.vue'),
+    meta: { title: 'Asistencia' }
+  },
+  {
     path: '/payroll',
     name: 'Payroll',
     component: () => import('@/views/PayrollView.vue'),

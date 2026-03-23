@@ -48,10 +48,46 @@
           <input v-model="form.hire_date" class="input" type="date" required />
         </div>
 
+        <!-- Separador horario -->
+        <div class="col-span-2 border-t border-gray-100 pt-3">
+          <p class="text-sm font-semibold text-gray-700 mb-3">Horario de trabajo</p>
+          <div class="grid grid-cols-3 gap-3">
+            <!-- Hora entrada -->
+            <div>
+              <label class="label">Hora de entrada</label>
+              <input v-model="form.hora_entrada" class="input" type="time" />
+            </div>
+
+            <!-- Hora salida -->
+            <div>
+              <label class="label">Hora de salida</label>
+              <input v-model="form.hora_salida" class="input" type="time" />
+            </div>
+
+            <!-- Horas por día -->
+            <div>
+              <label class="label">Horas por día</label>
+              <input v-model="form.horas_por_dia" class="input" type="number"
+                     min="1" max="24" step="0.5" placeholder="8" />
+            </div>
+          </div>
+
+          <!-- Preview valor por hora -->
+          <div v-if="valorPorHora > 0"
+               class="mt-2 text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2">
+            Valor por hora:
+            <strong class="text-gray-700">{{ fmt(valorPorHora) }}</strong>
+            <span class="ml-2 text-gray-400">
+              (C${{ form.salary_base }} ÷ 15 ÷ {{ form.horas_por_dia }} hrs)
+            </span>
+          </div>
+        </div>
+
         <!-- Activo -->
         <div class="col-span-2 flex items-center gap-3">
           <input v-model="form.active" id="active" type="checkbox"
-                 class="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500" />
+                 class="w-4 h-4 text-blue-600 rounded border-gray-300
+                        focus:ring-blue-500" />
           <label for="active" class="text-sm font-medium text-gray-700">
             Empleado activo
           </label>
@@ -95,7 +131,8 @@ const isEdit  = computed(() => !!props.employee?.id)
 
 const emptyForm = () => ({
   name: '', cedula: '', phone: '', position: '',
-  salary_base: '', hire_date: '', active: true
+  salary_base: '', hire_date: '', active: true,
+  hora_entrada: '', hora_salida: '', horas_por_dia: ''
 })
 
 const form = ref(emptyForm())
@@ -104,6 +141,14 @@ const show = computed({
   get: () => props.modelValue,
   set: (v) => emit('update:modelValue', v)
 })
+
+const valorPorHora = computed(() => {
+  if (!form.value.salary_base || !form.value.horas_por_dia) return 0
+  return parseFloat(form.value.salary_base) / 15 / parseFloat(form.value.horas_por_dia)
+})
+
+const fmt = (n) =>
+  new Intl.NumberFormat('es-NI', { style: 'currency', currency: 'NIO' }).format(n || 0)
 
 watch(() => props.employee, (emp) => {
   form.value  = emp ? { ...emp } : emptyForm()

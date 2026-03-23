@@ -150,13 +150,27 @@
             <!-- Descuento por faltas solo en Q2 -->
             <template v-if="period == 2 && preview.descuento_faltas > 0">
               <span class="text-gray-600">
-                Desc. por faltas
+                Desc. faltas vacaciones
                 <span class="text-xs opacity-70">
-                  ({{ preview.dias_descuento }} día(s) × salario÷15)
+                  ({{ preview.dias_descuento }} día(s))
                 </span>
               </span>
               <span class="text-right font-medium text-red-500">
                 − {{ fmt(preview.descuento_faltas) }}
+              </span>
+            </template>
+
+            <!-- Descuento por tardanzas -->
+            <template v-if="preview.descuento_tardanzas > 0">
+              <span class="text-gray-600">
+                Desc. tardanzas
+                <span class="text-xs opacity-70">
+                  ({{ preview.total_tardanzas }} llegada(s) tarde,
+                  {{ preview.total_horas_tarde }} hr(s))
+                </span>
+              </span>
+              <span class="text-right font-medium text-red-500">
+                − {{ fmt(preview.descuento_tardanzas) }}
               </span>
             </template>
 
@@ -223,18 +237,6 @@
                   {{ r.employee_name }}
                 </p>
                 <p class="text-xs text-gray-400">{{ r.employee_cedula }}</p>
-
-                <!-- Alerta vacaciones desactualizadas -->
-                <div v-if="tieneVacacionesDesactualizadas(r)"
-                     class="mt-1 flex items-center gap-1 text-xs text-amber-600">
-                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24"
-                       stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                  </svg>
-                  Vacaciones cambiaron — editar para actualizar
-                </div>
 
                 <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1
                             text-xs text-gray-500">
@@ -374,16 +376,6 @@ const totalGeneral = computed(() =>
 const yaAgregado = (employeeId) =>
   registros.value.some(r => r.employee === employeeId)
 
-// ── Detectar vacaciones desactualizadas ───────────────────────────────────────
-function tieneVacacionesDesactualizadas(registro) {
-  if (period.value != 1) return false
-  const vac = vacStore.vacations.find(v => v.employee === registro.employee)
-  if (!vac) return false
-  const montoEsperado = parseFloat(vac.monto_vacaciones)
-  const montoActual   = parseFloat(registro.vacation_payment)
-  return Math.abs(montoEsperado - montoActual) > 0.01
-}
-
 // ── Persistir estado ──────────────────────────────────────────────────────────
 function persistirForm() {
   store.guardarSesion({
@@ -439,22 +431,31 @@ async function actualizarPreview() {
     const emp = res.data.find(e => e.employee_id === form.value.employee)
     if (!emp) return
 
-    const vac      = period.value == 1 ? parseFloat(emp.vacation_payment || 0) : 0
-    const desc     = period.value == 2 ? parseFloat(emp.descuento_faltas  || 0) : 0
+    const vac               = period.value == 1 ? parseFloat(emp.vacation_payment || 0) : 0
+    const desc_faltas       = period.value == 2 ? parseFloat(emp.descuento_faltas  || 0) : 0
+    const desc_tardanzas    = parseFloat(emp.descuento_tardanzas || 0)
+    const otras             = parseFloat(form.value.otras_deducciones || 0)
+    const prestamo          = parseFloat(form.value.prestamo_adelanto  || 0)
+
     const sub_total = parseFloat(emp.salary_base)
       + vac
       + parseFloat(form.value.viatico || 0)
+
     const total = sub_total
-      - parseFloat(form.value.otras_deducciones || 0)
-      - parseFloat(form.value.prestamo_adelanto  || 0)
-      - desc
+      - otras
+      - prestamo
+      - desc_faltas
+      - desc_tardanzas
 
     preview.value = {
-      salary_base:      emp.salary_base,
-      vacation_payment: emp.vacation_payment,
-      dias_a_pagar:     emp.dias_a_pagar,
-      descuento_faltas: emp.descuento_faltas,
-      dias_descuento:   emp.dias_descuento,
+      salary_base:          emp.salary_base,
+      vacation_payment:     emp.vacation_payment,
+      dias_a_pagar:         emp.dias_a_pagar,
+      descuento_faltas:     emp.descuento_faltas,
+      dias_descuento:       emp.dias_descuento,
+      descuento_tardanzas:  emp.descuento_tardanzas,
+      total_tardanzas:      emp.total_tardanzas,
+      total_horas_tarde:    emp.total_horas_tarde,
       sub_total,
       total,
     }
@@ -499,8 +500,8 @@ async function guardar() {
       .find(e => e.id === form.value.employee)?.name
     formSuccess.value = `✅ Nómina de ${empName} guardada correctamente.`
 
-    form.value    = store.sesionVacia().form
-    preview.value = {}
+    form.value     = store.sesionVacia().form
+    preview.value  = {}
     editando.value = null
 
     store.guardarSesion({
