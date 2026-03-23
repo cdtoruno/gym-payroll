@@ -2,8 +2,12 @@ import csv
 import math
 from datetime import datetime
 from decimal import Decimal
+from io import BytesIO
 
 from django.http import HttpResponse
+from django.views import View
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -25,19 +29,15 @@ from .services import (
     get_descuento_tardanzas,
     PayrollValidationError,
 )
+from .export import generate_payroll_excel
 
 
 class PayrollListView(generics.ListAPIView):
-    """
-    GET /api/payroll/
-    Soporta ?period= ?date_from= ?date_to= ?employee=
-    """
     serializer_class = PayrollRecordSerializer
 
     def get_queryset(self):
         qs = PayrollRecord.objects.select_related("employee").all()
         p  = self.request.query_params
-
         if p.get("period"):    qs = qs.filter(period=p["period"])
         if p.get("date_from"): qs = qs.filter(date__gte=p["date_from"])
         if p.get("date_to"):   qs = qs.filter(date__lte=p["date_to"])
@@ -46,20 +46,11 @@ class PayrollListView(generics.ListAPIView):
 
 
 class PayrollDetailView(generics.RetrieveDestroyAPIView):
-    """
-    GET    /api/payroll/{id}/
-    DELETE /api/payroll/{id}/
-    """
     queryset         = PayrollRecord.objects.select_related("employee").all()
     serializer_class = PayrollRecordSerializer
 
 
 class PayrollPreviewView(APIView):
-    """
-    GET /api/payroll/preview/?date=YYYY-MM-DD&period=1
-    Muestra todos los empleados con vacaciones, descuentos por faltas
-    y descuentos por tardanzas calculados desde el historial real.
-    """
     def get(self, request):
         payroll_date = request.query_params.get("date")
         period       = request.query_params.get("period")
@@ -89,7 +80,6 @@ class PayrollPreviewView(APIView):
                 period   = period
             ).first()
 
-            # ── Vacaciones desde historial real (solo Q1) ─────────────────
             vacation_payment = 0
             dias_a_pagar     = 0
 
@@ -103,25 +93,20 @@ class PayrollPreviewView(APIView):
                 pago_por_dia     = float(emp.salary_base) / 12
                 vacation_payment = round(dias_a_pagar * pago_por_dia, 2)
 
-            # ── Descuento por faltas en Q2 (solo faltas Q1 que exceden 2) ─
             descuento_faltas = 0
             dias_descuento   = 0
 
             if period == 2:
-                # Solo las faltas en Q1 que exceden los 2 días de vacaciones
-                # Las faltas en Q2 NO descuentan salario — solo afectan vac del mes siguiente
                 faltas_q1 = VacationAbsence.objects.filter(
                     employee     = emp,
                     fecha__year  = payroll_date.year,
                     fecha__month = payroll_date.month,
                     es_q1        = True,
                 ).count()
-
                 dias_descuento   = max(0, faltas_q1 - 2)
                 pago_por_dia_q2  = float(emp.salary_base) / 15
                 descuento_faltas = round(dias_descuento * pago_por_dia_q2, 2)
 
-            # ── Descuento por tardanzas ───────────────────────────────────
             descuento_tardanzas = float(get_descuento_tardanzas(
                 employee = emp,
                 period   = period,
@@ -129,7 +114,6 @@ class PayrollPreviewView(APIView):
                 month    = payroll_date.month,
             ))
 
-            # ── Tardanzas del período ─────────────────────────────────────
             tardanzas = LateArrival.objects.filter(
                 employee     = emp,
                 fecha__year  = payroll_date.year,
@@ -147,17 +131,13 @@ class PayrollPreviewView(APIView):
                 "employee_cedula":     emp.cedula,
                 "employee_position":   emp.position,
                 "salary_base":         float(emp.salary_base),
-                # Q1
                 "vacation_payment":    vacation_payment,
                 "dias_a_pagar":        dias_a_pagar,
-                # Q2
                 "descuento_faltas":    descuento_faltas,
                 "dias_descuento":      dias_descuento,
-                # Tardanzas
                 "descuento_tardanzas": descuento_tardanzas,
                 "total_tardanzas":     total_tardanzas,
                 "total_horas_tarde":   total_horas_tarde,
-                # Editables existentes
                 "viatico":             float(existing.viatico)           if existing else 0,
                 "otras_deducciones":   float(existing.otras_deducciones) if existing else 0,
                 "prestamo_adelanto":   float(existing.prestamo_adelanto) if existing else 0,
@@ -170,9 +150,6 @@ class PayrollPreviewView(APIView):
 
 
 class GeneratePayrollBulkView(APIView):
-    """
-    POST /api/payroll/generate-bulk/
-    """
     def post(self, request):
         serializer = BulkPayrollSerializer(data=request.data)
         if not serializer.is_valid():
@@ -180,7 +157,6 @@ class GeneratePayrollBulkView(APIView):
                 serializer.errors,
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         data = serializer.validated_data
         try:
             records = generate_payroll_bulk(
@@ -189,10 +165,7 @@ class GeneratePayrollBulkView(APIView):
                 items        = data["items"],
             )
         except PayrollValidationError as e:
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(
             PayrollRecordSerializer(records, many=True).data,
@@ -201,9 +174,6 @@ class GeneratePayrollBulkView(APIView):
 
 
 class GeneratePayrollView(APIView):
-    """
-    POST /api/payroll/generate/
-    """
     def post(self, request):
         serializer = GeneratePayrollSerializer(data=request.data)
         if not serializer.is_valid():
@@ -230,49 +200,123 @@ class GeneratePayrollView(APIView):
         )
 
 
-class ExportPayrollCSVView(APIView):
+@method_decorator(csrf_exempt, name="dispatch")
+
+@method_decorator(csrf_exempt, name="dispatch")
+class ExportPayrollExcelView(View):
     """
     GET /api/payroll/export/
+    Guarda en archivo temporal para evitar corrupción binaria.
     """
     def get(self, request):
+        import tempfile
+        import os
+
         qs = PayrollRecord.objects.select_related("employee").all()
-        p  = request.query_params
+        p  = request.GET
 
         if p.get("period"):    qs = qs.filter(period=p["period"])
         if p.get("date_from"): qs = qs.filter(date__gte=p["date_from"])
         if p.get("date_to"):   qs = qs.filter(date__lte=p["date_to"])
 
-        filename = f"nomina_{datetime.now():%Y%m%d_%H%M%S}.csv"
-        response = HttpResponse(content_type="text/csv; charset=utf-8")
+        if not qs.exists():
+            return HttpResponse(
+                '{"error": "No hay registros para exportar."}',
+                content_type="application/json",
+                status=404
+            )
+
+        first  = qs.first()
+        month  = first.date.month
+        year   = first.date.year
+        period = first.period
+
+        records_data = []
+        for r in qs.order_by("employee__name"):
+            records_data.append({
+                "employee_name":       r.employee.name,
+                "employee_position":   r.employee.position,
+                "employee_cedula":     r.employee.cedula,
+                "dias_laborados":      r.dias_laborados,
+                "salary_base":         float(r.salary_base),
+                "vacation_payment":    float(r.vacation_payment),
+                "sub_total":           float(r.sub_total),
+                "otras_deducciones":   float(r.otras_deducciones),
+                "prestamo_adelanto":   float(r.prestamo_adelanto),
+                "descuento_tardanzas": float(r.otras_deducciones),
+                "total":               float(r.total),
+            })
+
+        # Guardar en disco temporalmente
+        wb  = generate_payroll_excel(records_data, period, month, year)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        wb.save(tmp.name)
+        tmp.close()
+
+        # Leer y enviar
+        with open(tmp.name, "rb") as f:
+            excel_data = f.read()
+        os.unlink(tmp.name)
+
+        filename = f"planilla_{year}_{month:02d}_Q{period}.xlsx"
+        response = HttpResponse(
+            excel_data,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
-        response.write("\ufeff")
+        response["Content-Length"]      = len(excel_data)
+        return response
+    """
+    GET /api/payroll/export/
+    Vista Django pura — evita que DRF re-codifique el binario.
+    """
+    def get(self, request):
+        qs = PayrollRecord.objects.select_related("employee").all()
+        p  = request.GET
 
-        writer = csv.writer(response)
-        writer.writerow([
-            "No.", "Nombres y Apellidos", "Cargo", "Días Laborados", "Cédula",
-            "Salario Ordinario", "Vacaciones", "Viático",
-            "Sub-Total Devengado",
-            "Otras Deducciones", "Deduc. Préstamo/Adelanto",
-            "Descuento Faltas", "Total Devengado", "Notas", "Generado",
-        ])
+        if p.get("period"):    qs = qs.filter(period=p["period"])
+        if p.get("date_from"): qs = qs.filter(date__gte=p["date_from"])
+        if p.get("date_to"):   qs = qs.filter(date__lte=p["date_to"])
 
-        for i, r in enumerate(qs, start=1):
-            writer.writerow([
-                i,
-                r.employee.name,
-                r.employee.position,
-                r.dias_laborados,
-                r.employee.cedula,
-                r.salary_base,
-                r.vacation_payment,
-                r.viatico,
-                r.sub_total,
-                r.otras_deducciones,
-                r.prestamo_adelanto,
-                r.descuento_faltas,
-                r.total,
-                r.notes,
-                r.created_at.strftime("%Y-%m-%d %H:%M"),
-            ])
+        if not qs.exists():
+            return HttpResponse(
+                '{"error": "No hay registros para exportar."}',
+                content_type="application/json",
+                status=404
+            )
 
+        first  = qs.first()
+        month  = first.date.month
+        year   = first.date.year
+        period = first.period
+
+        records_data = []
+        for r in qs.order_by("employee__name"):
+            records_data.append({
+                "employee_name":       r.employee.name,
+                "employee_position":   r.employee.position,
+                "employee_cedula":     r.employee.cedula,
+                "dias_laborados":      r.dias_laborados,
+                "salary_base":         float(r.salary_base),
+                "vacation_payment":    float(r.vacation_payment),
+                "sub_total":           float(r.sub_total),
+                "otras_deducciones":   float(r.otras_deducciones),
+                "prestamo_adelanto":   float(r.prestamo_adelanto),
+                "descuento_tardanzas": float(r.otras_deducciones),
+                "total":               float(r.total),
+            })
+
+        wb         = generate_payroll_excel(records_data, period, month, year)
+        buffer     = BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        excel_data = buffer.getvalue()
+
+        filename = f"planilla_{year}_{month:02d}_Q{period}.xlsx"
+        response = HttpResponse(
+            excel_data,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response["Content-Length"]      = len(excel_data)
         return response
