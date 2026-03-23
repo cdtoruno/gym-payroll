@@ -34,6 +34,29 @@ def get_faltas_para_mes(employee, year: int, month: int) -> dict:
 def get_descuento_faltas_q2(employee, year: int, month: int) -> Decimal:
     """
     Calcula el descuento por faltas extra que se aplica en Q2.
+
+    Regla:
+    - Los 2 primeros días faltados en Q1 consumen vacaciones
+    - A partir del 3er día faltado en Q1 → descuenta salario en Q2
+    - Las faltas en Q2 NO descuentan salario, solo afectan vac del siguiente mes
+    """
+    faltas_q1 = VacationAbsence.objects.filter(
+        employee     = employee,
+        fecha__year  = year,
+        fecha__month = month,
+        es_q1        = True,
+    ).count()
+
+    # Solo los días Q1 que exceden los 2 días de vacaciones
+    faltas_q1_extra = max(0, faltas_q1 - 2)
+
+    if faltas_q1_extra == 0:
+        return Decimal("0")
+
+    pago_por_dia = Decimal(str(employee.salary_base)) / Decimal("15")
+    return (pago_por_dia * faltas_q1_extra).quantize(Decimal("0.01"))
+    """
+    Calcula el descuento por faltas extra que se aplica en Q2.
     - Los 2 primeros días faltados del mes consumen vacaciones en Q1
     - A partir del 3er día faltado se descuenta de Q2
     - Las faltas en Q2 también descuentan directo
