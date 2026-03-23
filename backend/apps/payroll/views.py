@@ -1,5 +1,7 @@
 import csv
+import math
 from datetime import datetime
+from decimal import Decimal
 
 from django.http import HttpResponse
 from rest_framework import generics, status
@@ -8,6 +10,7 @@ from rest_framework.response import Response
 
 from apps.employees.models import Employee
 from apps.vacations.models import VacationAbsence
+from apps.attendance.models import LateArrival
 from .models import PayrollRecord
 from .serializers import (
     PayrollRecordSerializer,
@@ -19,6 +22,7 @@ from .services import (
     generate_payroll_bulk,
     get_faltas_para_mes,
     get_descuento_faltas_q2,
+    get_descuento_tardanzas,
     PayrollValidationError,
 )
 
@@ -53,8 +57,8 @@ class PayrollDetailView(generics.RetrieveDestroyAPIView):
 class PayrollPreviewView(APIView):
     """
     GET /api/payroll/preview/?date=YYYY-MM-DD&period=1
-    Muestra todos los empleados con vacaciones y descuentos
-    calculados desde el historial real de faltas.
+    Muestra todos los empleados con vacaciones, descuentos por faltas
+    y descuentos por tardanzas calculados desde el historial real.
     """
     def get(self, request):
         payroll_date = request.query_params.get("date")
@@ -90,7 +94,7 @@ class PayrollPreviewView(APIView):
             dias_a_pagar     = 0
 
             if period == 1:
-                faltas       = get_faltas_para_mes(
+                faltas           = get_faltas_para_mes(
                     employee = emp,
                     year     = payroll_date.year,
                     month    = payroll_date.month,
@@ -99,12 +103,11 @@ class PayrollPreviewView(APIView):
                 pago_por_dia     = float(emp.salary_base) / 12
                 vacation_payment = round(dias_a_pagar * pago_por_dia, 2)
 
-            # ── Descuento por faltas (solo Q2) ────────────────────────────
+            # ── Descuento por faltas de vacaciones (solo Q2) ──────────────
             descuento_faltas = 0
             dias_descuento   = 0
 
             if period == 2:
-                # Faltas Q1 que exceden 2 días
                 faltas_q1 = VacationAbsence.objects.filter(
                     employee     = emp,
                     fecha__year  = payroll_date.year,
@@ -112,7 +115,6 @@ class PayrollPreviewView(APIView):
                     es_q1        = True,
                 ).count()
 
-                # Faltas Q2 del mes
                 faltas_q2 = VacationAbsence.objects.filter(
                     employee     = emp,
                     fecha__year  = payroll_date.year,
@@ -124,25 +126,49 @@ class PayrollPreviewView(APIView):
                 pago_por_dia_q2  = float(emp.salary_base) / 15
                 descuento_faltas = round(dias_descuento * pago_por_dia_q2, 2)
 
+            # ── Descuento por tardanzas ───────────────────────────────────
+            descuento_tardanzas = float(get_descuento_tardanzas(
+                employee = emp,
+                period   = period,
+                year     = payroll_date.year,
+                month    = payroll_date.month,
+            ))
+
+            # ── Horas tarde del período ───────────────────────────────────
+            tardanzas = LateArrival.objects.filter(
+                employee     = emp,
+                fecha__year  = payroll_date.year,
+                fecha__month = payroll_date.month,
+                period       = period,
+            )
+            total_tardanzas = tardanzas.count()
+            total_horas_tarde = sum(
+                math.ceil(t.minutos_tarde / 60) for t in tardanzas
+            )
+
             preview.append({
-                "employee_id":       emp.id,
-                "employee_name":     emp.name,
-                "employee_cedula":   emp.cedula,
-                "employee_position": emp.position,
-                "salary_base":       float(emp.salary_base),
+                "employee_id":          emp.id,
+                "employee_name":        emp.name,
+                "employee_cedula":      emp.cedula,
+                "employee_position":    emp.position,
+                "salary_base":          float(emp.salary_base),
                 # Q1
-                "vacation_payment":  vacation_payment,
-                "dias_a_pagar":      dias_a_pagar,
+                "vacation_payment":     vacation_payment,
+                "dias_a_pagar":         dias_a_pagar,
                 # Q2
-                "descuento_faltas":  descuento_faltas,
-                "dias_descuento":    dias_descuento,
+                "descuento_faltas":     descuento_faltas,
+                "dias_descuento":       dias_descuento,
+                # Tardanzas
+                "descuento_tardanzas":  descuento_tardanzas,
+                "total_tardanzas":      total_tardanzas,
+                "total_horas_tarde":    total_horas_tarde,
                 # Editables existentes
-                "viatico":           float(existing.viatico)           if existing else 0,
-                "otras_deducciones": float(existing.otras_deducciones) if existing else 0,
-                "prestamo_adelanto": float(existing.prestamo_adelanto) if existing else 0,
-                "notes":             existing.notes                    if existing else "",
-                "already_generated": existing is not None,
-                "record_id":         existing.id                       if existing else None,
+                "viatico":              float(existing.viatico)           if existing else 0,
+                "otras_deducciones":    float(existing.otras_deducciones) if existing else 0,
+                "prestamo_adelanto":    float(existing.prestamo_adelanto) if existing else 0,
+                "notes":                existing.notes                    if existing else "",
+                "already_generated":    existing is not None,
+                "record_id":            existing.id                       if existing else None,
             })
 
         return Response(preview)
@@ -232,7 +258,7 @@ class ExportPayrollCSVView(APIView):
             "Salario Ordinario", "Vacaciones", "Viático",
             "Sub-Total Devengado",
             "Otras Deducciones", "Deduc. Préstamo/Adelanto",
-            "Descuento Faltas",
+            "Descuento Faltas", "Descuento Tardanzas",
             "Total Devengado", "Notas", "Generado",
         ])
 

@@ -1,5 +1,6 @@
 from decimal import Decimal
 from datetime import date
+import math
 
 from apps.employees.models import Employee
 from apps.vacations.models import Vacation, VacationAbsence
@@ -14,10 +15,6 @@ def get_faltas_para_mes(employee, year: int, month: int) -> dict:
     """
     Calcula las faltas que afectan el Q1 de un mes específico
     usando directamente el campo mes_afectado de VacationAbsence.
-
-    Retorna:
-        total_faltas: faltas que afectan ese Q1
-        dias_a_pagar: max(0, 2 - total_faltas)
     """
     mes_afectado_date = date(year, month, 1)
 
@@ -37,20 +34,10 @@ def get_faltas_para_mes(employee, year: int, month: int) -> dict:
 def get_descuento_faltas_q2(employee, year: int, month: int) -> Decimal:
     """
     Calcula el descuento por faltas extra que se aplica en Q2.
-
-    Regla:
     - Los 2 primeros días faltados del mes consumen vacaciones en Q1
-    - A partir del 3er día faltado (sin importar si cayó en Q1 o Q2)
-      se descuenta de Q2: días_extra × (salario ÷ 15)
-    - Las faltas en Q2 también descuentan directo: cada día = salario ÷ 15
-
-    Lógica:
-    1. Contar faltas en Q1 del mes → las primeras 2 consumen vacaciones
-       Si hay más de 2 en Q1 → los extras descuentan en Q2
-    2. Contar faltas en Q2 del mes → todas descuentan en Q2
-    Total descuento Q2 = (faltas_q1_extra + faltas_q2) × (salario ÷ 15)
+    - A partir del 3er día faltado se descuenta de Q2
+    - Las faltas en Q2 también descuentan directo
     """
-    # Faltas en Q1 del mes (días 1-15)
     faltas_q1 = VacationAbsence.objects.filter(
         employee     = employee,
         fecha__year  = year,
@@ -58,7 +45,6 @@ def get_descuento_faltas_q2(employee, year: int, month: int) -> Decimal:
         es_q1        = True,
     ).count()
 
-    # Faltas en Q2 del mes (días 16-31)
     faltas_q2 = VacationAbsence.objects.filter(
         employee     = employee,
         fecha__year  = year,
@@ -66,10 +52,7 @@ def get_descuento_faltas_q2(employee, year: int, month: int) -> Decimal:
         es_q1        = False,
     ).count()
 
-    # Faltas Q1 que exceden los 2 días de vacaciones → descuentan en Q2
-    faltas_q1_extra = max(0, faltas_q1 - 2)
-
-    # Total días a descontar en Q2
+    faltas_q1_extra      = max(0, faltas_q1 - 2)
     total_dias_descuento = faltas_q1_extra + faltas_q2
 
     if total_dias_descuento == 0:
@@ -77,6 +60,34 @@ def get_descuento_faltas_q2(employee, year: int, month: int) -> Decimal:
 
     pago_por_dia = Decimal(str(employee.salary_base)) / Decimal("15")
     return (pago_por_dia * total_dias_descuento).quantize(Decimal("0.01"))
+
+
+def get_descuento_tardanzas(employee, period: int, year: int, month: int) -> Decimal:
+    """
+    Recalcula el descuento real por tardanzas usando las horas reales.
+    horas_tarde = ceil(minutos_tarde / 60)
+    descuento   = horas_tarde × valor_por_hora
+    """
+    from apps.attendance.models import LateArrival
+
+    tardanzas = LateArrival.objects.filter(
+        employee     = employee,
+        fecha__year  = year,
+        fecha__month = month,
+        period       = period,
+    )
+
+    if not tardanzas.exists():
+        return Decimal("0")
+
+    valor_por_hora = Decimal(str(employee.valor_por_hora))
+    total          = Decimal("0")
+
+    for t in tardanzas:
+        horas  = math.ceil(t.minutos_tarde / 60)
+        total += valor_por_hora * horas
+
+    return total.quantize(Decimal("0.01"))
 
 
 def calculate_vacation_payment(salary_base: Decimal, dias_a_pagar: int) -> Decimal:
@@ -100,8 +111,6 @@ def calculate_totals(
     period: int,
 ) -> dict:
     """
-    Cálculo puro sin acceso a BD.
-
     Q1: sub_total = salary_base + vacation_payment + viatico
     Q2: sub_total = salary_base + viatico
     total = sub_total - otras_deducciones - prestamo_adelanto - descuento_faltas
@@ -149,9 +158,9 @@ def generate_payroll(
 ) -> PayrollRecord:
     """
     Genera o actualiza la nómina de un empleado.
-
     Q1: calcula vacation_payment desde historial real de faltas
     Q2: calcula descuento_faltas desde faltas del mes
+    Ambos: calcula descuento por tardanzas usando horas reales
     """
     if period not in (1, 2):
         raise PayrollValidationError(
@@ -184,7 +193,7 @@ def generate_payroll(
         month    = payroll_date.month,
     )
 
-    # ── Descuento por faltas (solo Q2) ────────────────────────────────────
+    # ── Descuento por faltas de vacaciones (solo Q2) ──────────────────────
     descuento_faltas = Decimal("0")
     if period == 2:
         descuento_faltas = get_descuento_faltas_q2(
@@ -193,11 +202,21 @@ def generate_payroll(
             month    = payroll_date.month,
         )
 
+    # ── Descuento por tardanzas (Q1 y Q2) ────────────────────────────────
+    descuento_tardanzas = get_descuento_tardanzas(
+        employee = employee,
+        period   = period,
+        year     = payroll_date.year,
+        month    = payroll_date.month,
+    )
+
+    otras_deducciones_total = otras_deducciones + descuento_tardanzas
+
     totals = calculate_totals(
         salary_base       = employee.salary_base,
         vacation_payment  = vacation_payment,
         viatico           = viatico,
-        otras_deducciones = otras_deducciones,
+        otras_deducciones = otras_deducciones_total,
         prestamo_adelanto = prestamo_adelanto,
         descuento_faltas  = descuento_faltas,
         period            = period,
@@ -212,7 +231,7 @@ def generate_payroll(
             "salary_base":       employee.salary_base,
             "vacation_payment":  totals["vacation_payment"],
             "viatico":           viatico,
-            "otras_deducciones": otras_deducciones,
+            "otras_deducciones": otras_deducciones_total,
             "prestamo_adelanto": prestamo_adelanto,
             "descuento_faltas":  descuento_faltas,
             "sub_total":         totals["sub_total"],
@@ -269,11 +288,20 @@ def generate_payroll_bulk(
                 month    = payroll_date.month,
             )
 
+        descuento_tardanzas = get_descuento_tardanzas(
+            employee = employee,
+            period   = period,
+            year     = payroll_date.year,
+            month    = payroll_date.month,
+        )
+
+        otras_deducciones_total = otras_deducciones + descuento_tardanzas
+
         totals = calculate_totals(
             salary_base       = employee.salary_base,
             vacation_payment  = vacation_payment,
             viatico           = viatico,
-            otras_deducciones = otras_deducciones,
+            otras_deducciones = otras_deducciones_total,
             prestamo_adelanto = prestamo_adelanto,
             descuento_faltas  = descuento_faltas,
             period            = period,
@@ -288,7 +316,7 @@ def generate_payroll_bulk(
                 "salary_base":       employee.salary_base,
                 "vacation_payment":  totals["vacation_payment"],
                 "viatico":           viatico,
-                "otras_deducciones": otras_deducciones,
+                "otras_deducciones": otras_deducciones_total,
                 "prestamo_adelanto": prestamo_adelanto,
                 "descuento_faltas":  descuento_faltas,
                 "sub_total":         totals["sub_total"],

@@ -14,3 +14,24 @@ PARA CUANDO ME PIDA AGUINALDO
 
 
 https://delepesoasuspesos.com/calcular-aguinaldo-nicaragua
+
+
+# Para borrar todos los datos para hacer test
+
+from apps.vacations.models import Vacation, VacationAbsence
+from apps.payroll.models import PayrollRecord
+from apps.attendance.models import LateArrival
+
+# Borrar todo menos empleados
+LateArrival.objects.all().delete()
+VacationAbsence.objects.all().delete()
+Vacation.objects.all().delete()
+PayrollRecord.objects.all().delete()
+
+print("Datos borrados:")
+print(f"   LateArrival:     0")
+print(f"   VacationAbsence: 0")
+print(f"   Vacation:        0")
+print(f"   PayrollRecord:   0")
+
+exit()
