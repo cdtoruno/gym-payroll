@@ -1,4 +1,3 @@
-import csv
 import math
 from datetime import datetime
 from decimal import Decimal
@@ -201,12 +200,10 @@ class GeneratePayrollView(APIView):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-
-@method_decorator(csrf_exempt, name="dispatch")
 class ExportPayrollExcelView(View):
     """
     GET /api/payroll/export/
-    Guarda en archivo temporal para evitar corrupción binaria.
+    Vista Django pura — evita que DRF re-codifique el binario.
     """
     def get(self, request):
         import tempfile
@@ -233,84 +230,44 @@ class ExportPayrollExcelView(View):
 
         records_data = []
         for r in qs.order_by("employee__name"):
+            # Contar faltas del mes para descontar días laborados
+            faltas_mes = VacationAbsence.objects.filter(
+                employee     = r.employee,
+                fecha__year  = r.date.year,
+                fecha__month = r.date.month,
+            ).count()
+
+            dias_laborados = max(0, r.dias_laborados - faltas_mes)
+
+            descuento_tardanzas = get_descuento_tardanzas(
+                employee = r.employee,
+                period   = period,
+                year     = year,
+                month    = month,
+            )
+
             records_data.append({
                 "employee_name":       r.employee.name,
                 "employee_position":   r.employee.position,
                 "employee_cedula":     r.employee.cedula,
-                "dias_laborados":      r.dias_laborados,
+                "dias_laborados":      dias_laborados,
                 "salary_base":         float(r.salary_base),
                 "vacation_payment":    float(r.vacation_payment),
                 "sub_total":           float(r.sub_total),
                 "otras_deducciones":   float(r.otras_deducciones),
                 "prestamo_adelanto":   float(r.prestamo_adelanto),
-                "descuento_tardanzas": float(r.otras_deducciones),
+                "descuento_tardanzas": float(descuento_tardanzas),
                 "total":               float(r.total),
             })
 
-        # Guardar en disco temporalmente
         wb  = generate_payroll_excel(records_data, period, month, year)
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
         wb.save(tmp.name)
         tmp.close()
 
-        # Leer y enviar
         with open(tmp.name, "rb") as f:
             excel_data = f.read()
         os.unlink(tmp.name)
-
-        filename = f"planilla_{year}_{month:02d}_Q{period}.xlsx"
-        response = HttpResponse(
-            excel_data,
-            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        response["Content-Disposition"] = f'attachment; filename="{filename}"'
-        response["Content-Length"]      = len(excel_data)
-        return response
-    """
-    GET /api/payroll/export/
-    Vista Django pura — evita que DRF re-codifique el binario.
-    """
-    def get(self, request):
-        qs = PayrollRecord.objects.select_related("employee").all()
-        p  = request.GET
-
-        if p.get("period"):    qs = qs.filter(period=p["period"])
-        if p.get("date_from"): qs = qs.filter(date__gte=p["date_from"])
-        if p.get("date_to"):   qs = qs.filter(date__lte=p["date_to"])
-
-        if not qs.exists():
-            return HttpResponse(
-                '{"error": "No hay registros para exportar."}',
-                content_type="application/json",
-                status=404
-            )
-
-        first  = qs.first()
-        month  = first.date.month
-        year   = first.date.year
-        period = first.period
-
-        records_data = []
-        for r in qs.order_by("employee__name"):
-            records_data.append({
-                "employee_name":       r.employee.name,
-                "employee_position":   r.employee.position,
-                "employee_cedula":     r.employee.cedula,
-                "dias_laborados":      r.dias_laborados,
-                "salary_base":         float(r.salary_base),
-                "vacation_payment":    float(r.vacation_payment),
-                "sub_total":           float(r.sub_total),
-                "otras_deducciones":   float(r.otras_deducciones),
-                "prestamo_adelanto":   float(r.prestamo_adelanto),
-                "descuento_tardanzas": float(r.otras_deducciones),
-                "total":               float(r.total),
-            })
-
-        wb         = generate_payroll_excel(records_data, period, month, year)
-        buffer     = BytesIO()
-        wb.save(buffer)
-        buffer.seek(0)
-        excel_data = buffer.getvalue()
 
         filename = f"planilla_{year}_{month:02d}_Q{period}.xlsx"
         response = HttpResponse(

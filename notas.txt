@@ -35,3 +35,6 @@ print(f"   Vacation:        0")
 print(f"   PayrollRecord:   0")
 
 exit()
+
+
+Separar las deducciones de tardanzas y de otras deducciones etc en el excel
